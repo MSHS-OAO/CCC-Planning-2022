@@ -1,0 +1,350 @@
+---
+title: "MSHS Census Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+```{r Install and load packages}
+# Code for creating summary of MSH, MSM, and MSW census analysis -----------------
+#Install and load necessary packages --------------------
+# install.packages("readxl")
+# install.packages("writexl")
+# install.packages("ggplot2")
+# install.packages("lubridate")
+# install.packages("dplyr")
+# install.packages("reshape2")
+# install.packages("svDialogs")
+# install.packages("stringr")
+# install.packages("formattable")
+# install.packages("kableExtra")
+# install.packages("ggpubr")
+# install.packages("zipcodeR")
+# install.packages("tidyr")
+#Analysis for weekend discharge tracking
+library(readxl)
+library(writexl)
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+library(reshape2)
+library(svDialogs)
+library(stringr)
+library(formattable)
+library(scales)
+library(ggpubr)
+library(reshape2)
+library(knitr)
+library(kableExtra)
+library(rmarkdown)
+library(zipcodeR)
+library(tidyr)
+library(purrr)
+library(janitor)
+library(DT)
+```
+
+
+```{r Set directory, import reference and census data, include = FALSE}
+# # Clear history
+# rm(list = ls())
+# 
+# ## Determine path for working directory --------------
+# if ("Presidents" %in% list.files("J://")) {
+#   user_directory <- paste0("J:/Presidents/HSPI-PM/",
+#                            "Operations Analytics and Optimization/Projects/",
+#                            "System Operations/CCC Strike Planning")
+# } else {
+#   user_directory <- paste0("J:/deans/Presidents/HSPI-PM/",
+#                            "Operations Analytics and Optimization/Projects/",
+#                            "System Operations/CCC Strike Planning")
+# }
+
+## Import data ---------
+### Census data
+raw_df <- read_excel(path = paste0(user_directory,
+                                   "/Data/Command Center Raw Data for Kate Revised with ADT IP Patient 10.21.22.xlsx"))
+
+### Dept mapping
+dept_mapping <- read_excel(path = paste0(user_directory,
+                                         "/Data",
+                                         "/Census Dept Mappings 2022-10-18-arz-v2.xlsx"))
+
+dept_mapping_crosswalk <- dept_mapping %>%
+  select(-Notes, -`ARZ Notes`)
+
+census_date_start <- as.Date("3/1/21", format = "%m/%d/%y")
+census_date_end <- as.Date("5/31/21", format = "%m/%d/%y")
+
+dates_df <- data.frame("CensusDate" = seq.Date(from = census_date_start,
+                                               to = census_date_end,
+                                               by = "day"))
+
+dates_df <- dates_df %>%
+  mutate(DOW = wday(CensusDate, label = TRUE, abbr = TRUE),
+         WkendWkday = ifelse(DOW %in% c("Sat", "Sun"), "Weekend",
+                             "Weekday"))
+
+total_days <- nrow(dates_df)
+
+dow_summary <- dates_df %>%
+  group_by(DOW) %>%
+  summarize(Count = n()) %>%
+  ungroup()
+
+wkend_wkday_summary <- dates_df %>%
+  group_by(WkendWkday) %>%
+  summarize(Count = n()) %>%
+  ungroup()
+
+unit_type_order <- c("ICU",
+                     "Med Surg",
+                     "Tele",
+                     "ED",
+                     "L&D",
+                     "Mother Baby",
+                     "NICU",
+                     "Peds",
+                     "Peds ICU",
+                     "Rehab",
+                     "Psych",
+                     "Psych ED")
+
+site_order <- c("MSH", "MSM", "MSW")
+```
+
+```{r Process census data and calculate ADC by various stratifications}
+census_range_df <- raw_df %>%
+  rename(Encounter = `External Enc Id`,
+         AdmitDate = `Admit Date`,
+         DischDate = `Dsch Date`,
+         CensusDate = `Census Date`,
+         CensusDept = `Census Dept`,
+         DischSite = `Ip Site`) %>%
+  mutate(AdmitDate = as.Date(AdmitDate),
+         DischDate = as.Date(DischDate),
+         CensusDate = as.Date(CensusDate),
+         CensusDay = ifelse(CensusDate == DischDate, 0, 1),
+         DOW = wday(CensusDate, label = TRUE, abbr = TRUE),
+         DOWNum = wday(CensusDate, label = FALSE),
+         WkendWkday = ifelse(DOW %in% c("Sat", "Sun"), "Weekend", 
+                             "Weekday")) %>%
+  filter(between(CensusDate, census_date_start, census_date_end))
+
+census_range_df <- left_join(census_range_df,
+                             dept_mapping_crosswalk,
+                             by = c("CensusDept" = "Dept"))
+
+census_range_df <- census_range_df %>%
+  rename(CensusSite = Site,
+         UnitType = `Unit Type`) %>%
+  filter(Include %in% "Yes") %>%
+  mutate(UnitType = factor(UnitType,
+                           levels = unit_type_order,
+                           ordered = TRUE),
+         CensusSite = factor(CensusSite,
+                             levels = site_order,
+                             ordered = TRUE)) %>%
+  arrange(CensusSite, UnitType, DOWNum)
+
+
+## ADC across all days -----------------
+unit_type_total_adc <- census_range_df %>%
+  group_by(CensusSite,
+           UnitType) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(ADC = CensusDays / total_days)
+
+unit_type_total_adc_table <- unit_type_total_adc %>%
+  select(-CensusDays) %>%
+  pivot_wider(names_from = CensusSite,
+              values_from = ADC) %>%
+  adorn_totals(where = "row",
+               fill = "-",
+               na.rm = TRUE)
+
+## ADC by weekend/weekdays ----------------------
+unit_type_wkendwkday_adc <- census_range_df %>%
+  group_by(CensusSite,
+           UnitType,
+           WkendWkday) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup()
+
+unit_type_wkendwkday_adc <- left_join(unit_type_wkendwkday_adc,
+                                      wkend_wkday_summary,
+                                      by = c("WkendWkday" = "WkendWkday"))
+
+unit_type_wkendwkday_adc <- unit_type_wkendwkday_adc %>%
+  mutate(ADC = CensusDays / Count)
+
+unit_type_wkendwkday_adc_table <- unit_type_wkendwkday_adc %>%
+  select(-CensusDays, -Count) %>%
+  pivot_wider(names_from = c(CensusSite, WkendWkday),
+              names_sep = "_",
+              values_from = ADC) %>%
+  adorn_totals(where = "row",
+               fill = "-",
+               na.rm = TRUE)
+
+## ADC by day of week ---------------------
+unit_type_dow_adc <- census_range_df %>%
+  group_by(CensusSite,
+           UnitType,
+           DOW) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup()
+
+unit_type_dow_adc <- left_join(unit_type_dow_adc,
+                               dow_summary,
+                               by = c("DOW" = "DOW"))  
+
+unit_type_dow_adc <- unit_type_dow_adc %>%
+  mutate(ADC = CensusDays / Count)
+
+unit_type_dow_adc_table <- unit_type_dow_adc %>%
+  select(-CensusDays, -Count) %>%
+  pivot_wider(names_from = c(CensusSite, DOW),
+              names_sep = "_",
+              values_from = ADC) %>%
+  adorn_totals(where = "row",
+               fill = "-",
+               na.rm = TRUE)
+
+```
+
+## Average Daily Census Analysis {.tabset}
+
+### ADC Summary
+```{r Total ADC kables}
+unit_type_total_adc_table <- unit_type_total_adc_table %>%
+  rename(`Unit Type` = UnitType)
+
+kable(unit_type_total_adc_table,
+      format = "html",
+      escape = FALSE,
+      align = "l",
+      digits = 1,
+      caption = paste("Average Daily Census by Unit Type")) %>%
+  kable_styling(bootstrap_options = "hover",
+                font_size = 11,
+                full_width = FALSE) %>%
+  row_spec(row = 0,
+           background = "#221f72",
+           color = "white") %>%
+  row_spec(row = nrow(unit_type_total_adc_table),
+           bold = TRUE,
+           italic = TRUE)
+
+
+
+```
+
+### ADC by Weekend/Weekday
+```{r ADC by weekday and weekend kables}
+unit_type_wkendwkday_adc_table <- unit_type_wkendwkday_adc_table %>%
+  rename(`Unit Type` = UnitType) %>%
+  rename_with(~str_replace(.x, "_", "\\ "), contains("_"))
+
+kable(unit_type_wkendwkday_adc_table,
+      format = "html",
+      escape = FALSE,
+      align = "l",
+      digits = 1,
+      caption = paste("Average Daily Census on Weekdays and Weekends")) %>%
+  kable_styling(bootstrap_options = "hover",
+                font_size = 11,
+                full_width = FALSE) %>%
+  row_spec(row = 0,
+           background = "#221f72",
+           color = "white") %>%
+  row_spec(row = nrow(unit_type_wkendwkday_adc_table),
+           bold = TRUE,
+           italic = TRUE) %>%
+  column_spec(c(1, 3,5, 7), border_right = TRUE)
+
+
+```
+
+### ADC by Day of Week
+```{r ADC by day of week kables}
+
+site_adc_dow <- function(site) {
+  subset_data <- unit_type_dow_adc_table %>%
+    select(UnitType, contains(site)) %>%
+    mutate(
+      across(where(is.numeric), ~replace_na(.x, 0))
+      ) %>%
+    rename(`Unit Type` = UnitType) %>%
+    rename_with(~str_replace(.x, paste0(site, "_"), ""), contains("_"))
+  
+  kable(subset_data,
+        format = "html",
+        escape = FALSE,
+        align = "l",
+        digits = 1,
+        caption = paste(site,
+                        "Average Daily Census by Day of Week")) %>%
+    kable_styling(bootstrap_options = "hover",
+                  font_size = 11,
+                  full_width = FALSE) %>%
+    row_spec(row = 0,
+             background = "#221f72",
+             color = "white") %>%
+    row_spec(row = nrow(subset_data), 
+             bold = TRUE,
+             italic = TRUE) %>%
+    column_spec(c(1, 8), border_right = TRUE)
+
+}
+
+site_adc_dow(site = "MSH")
+
+site_adc_dow(site = "MSM")
+
+site_adc_dow(site = "MSW")
+
+
+
+
+```
+
+### Department Mappings
+```{r Department Mappings}
+excluded_unit_types <- unique(dept_mapping_crosswalk$`Unit Type`)
+
+excluded_unit_types <- excluded_unit_types[!(excluded_unit_types %in% unit_type_order)]
+
+all_unit_types <- c(unit_type_order, excluded_unit_types)
+
+dept_mapping_table <- dept_mapping_crosswalk %>%
+  mutate(Site = factor(Site, levels = site_order, ordered = TRUE),
+         `Unit Type` = factor(`Unit Type`, levels = all_unit_types,
+                              
+                              ordered = TRUE)) %>%
+  relocate(`Unit Type`, .after = Site) %>%
+  arrange(Site, `Unit Type`, desc(Include))
+
+datatable(dept_mapping_table,
+          rownames = FALSE,
+          options = list(
+            pageLength = 20,
+            paging = TRUE
+          ))
+
+```
+
+### Methodology and Assumptions
+
+**Data Source and Methodology**
+
+* Based on Epic Census Data provided by Enterprise Reporting Team on 10/21/22
+* Data includes inpatients discharged between 3/1/21 and 5/31/21
+* Census analysis represents census between 3/1/21 and 5/31/21
+* Analysis excludes any census days in departments that are not included (see Department Mappings tab)
+* Discharge days are not included as census days
