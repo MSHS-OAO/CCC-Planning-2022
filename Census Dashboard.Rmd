@@ -72,10 +72,16 @@ raw_df <- read_excel(path = paste0(user_directory,
 ### Dept mapping
 dept_mapping <- read_excel(path = paste0(user_directory,
                                          "/Data",
-                                         "/Census Dept Mappings 2022-10-18-arz-v2.xlsx"))
+                                         "/Census Dept and Admit Mappings 2022-10-25.xlsx"),
+                           sheet = "Census Dept")
 
 dept_mapping_crosswalk <- dept_mapping %>%
   select(-Notes, -`ARZ Notes`)
+
+admit_type_mapping <- read_excel(path = paste0(user_directory,
+                                         "/Data",
+                                         "/Census Dept and Admit Mappings 2022-10-25.xlsx"),
+                           sheet = "Admit Type")
 
 census_date_start <- as.Date("3/1/21", format = "%m/%d/%y")
 census_date_end <- as.Date("5/31/21", format = "%m/%d/%y")
@@ -215,6 +221,33 @@ unit_type_dow_adc_table <- unit_type_dow_adc %>%
   adorn_totals(where = "row",
                fill = "-",
                na.rm = TRUE)
+```
+
+```{r ALOS for each site and unit type}
+## Encounter level summary
+enc_unit_type_los <- census_range_df %>%
+  group_by(Encounter, CensusSite, UnitType) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup()
+
+enc_los_summary <- enc_unit_type_los %>%
+  group_by(CensusSite, UnitType) %>%
+  summarize(TotalDays = sum(CensusDays, na.rm = TRUE),
+            NumEncounters = n()) %>%
+  ungroup() %>%
+  mutate(UnitType = factor(UnitType,
+                           levels = unit_type_order,
+                           ordered = TRUE),
+         CensusSite = factor(CensusSite,
+                             levels = site_order,
+                             ordered = TRUE),
+         ALOS = TotalDays / NumEncounters) %>%
+  arrange(CensusSite, UnitType)
+
+unit_type_los_summary <- enc_los_summary %>%
+  select(-TotalDays, -NumEncounters) %>%
+  pivot_wider(names_from = CensusSite,
+              values_from = ALOS)
 
 ```
 
@@ -223,7 +256,34 @@ unit_type_dow_adc_table <- unit_type_dow_adc %>%
 ### ADC Summary
 ```{r Total ADC kables}
 unit_type_total_adc_table <- unit_type_total_adc_table %>%
-  rename(`Unit Type` = UnitType)
+  rename(`Unit Type` = UnitType) %>%
+  pivot_longer(cols = matches("MS[A-Z]{1}"),
+               names_to = "Site") %>%
+  mutate(Metric = "ADC")
+
+unit_type_los_summary <- unit_type_los_summary %>%
+  rename(`Unit Type` = UnitType) %>%
+  pivot_longer(cols = matches("MS[A-Z]{1}"),
+                names_to = "Site") %>%
+  mutate(Metric = "ALOS")
+
+
+unit_type_adc_los_table <- rbind(unit_type_total_adc_table,
+                                 unit_type_los_summary)
+
+unit_type_adc_los_table <- unit_type_adc_los_table %>%
+  mutate(`Unit Type` = factor(`Unit Type`,
+                              levels = c(unit_type_order, "Total"),
+                              ordered = TRUE),
+         Site = factor(Site,
+                       levels = site_order,
+                       ordered = TRUE)) %>%
+  arrange(`Unit Type`, Site, Metric) %>%
+  pivot_wider(names_from = c(Site, Metric),
+              names_sep = " ",
+              values_from = value)
+
+
 
 kable(unit_type_total_adc_table,
       format = "html",
