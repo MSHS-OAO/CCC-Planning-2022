@@ -1,5 +1,4 @@
 ---
-title: "MSHS Census Analysis"
 output: html_document
 ---
 
@@ -251,9 +250,11 @@ unit_type_los_summary <- enc_los_summary %>%
 
 ```
 
-## Average Daily Census Analysis {.tabset}
+## MSHS Census Analysis
 
-### ADC Summary
+### Average Daily Census Breakdowns (Created on `r format(Sys.Date(), "%m/%d/%Y")`) {.tabset}
+
+#### ADC Summary
 ```{r Total ADC kables}
 unit_type_total_adc_table <- unit_type_total_adc_table %>%
   rename(`Unit Type` = UnitType) %>%
@@ -278,34 +279,46 @@ unit_type_adc_los_table <- unit_type_adc_los_table %>%
          Site = factor(Site,
                        levels = site_order,
                        ordered = TRUE)) %>%
-  arrange(`Unit Type`, Site, Metric) %>%
+  arrange(Site, Metric, `Unit Type`) %>%
   pivot_wider(names_from = c(Site, Metric),
               names_sep = " ",
               values_from = value)
 
-
-
-kable(unit_type_total_adc_table,
+kable(unit_type_adc_los_table,
       format = "html",
       escape = FALSE,
       align = "l",
       digits = 1,
-      caption = paste("Average Daily Census by Unit Type")) %>%
+      caption = paste("Average Daily Census by Unit Type"),
+      col.names = c("Unit Type", "ADC", "ALOS", "ADC", "ALOS", "ADC", "ALOS")) %>%
   kable_styling(bootstrap_options = "hover",
                 font_size = 11,
                 full_width = FALSE) %>%
-  row_spec(row = 0,
-           background = "#221f72",
-           color = "white") %>%
-  row_spec(row = nrow(unit_type_total_adc_table),
+  column_spec(c(2:3),
+              background = "#ccf1ff") %>%
+  column_spec(c(4:5),
+              background = "#fccfec") %>%
+  column_spec(c(6:7),
+              background = "#d8d7f4") %>%
+  # row_spec(row = 0,
+  #          background = "#221f72",
+  #          color = "white") %>%
+  row_spec(row = nrow(unit_type_adc_los_table),
            bold = TRUE,
-           italic = TRUE)
+           italic = TRUE,
+           background = "#e5e5e6") %>%
+  column_spec(c(1, 3, 5, 7), border_right = TRUE) %>%
+  add_header_above(c(" " = 1, "MSH" = 2, "MSM" = 2, "MSW" = 2),
+                   background = c("", "#00AEEF", "#D80B8C", "#221F72"),
+                   line = TRUE,
+                   color = "white")
+
 
 
 
 ```
 
-### ADC by Weekend/Weekday
+#### ADC by Weekend/Weekday
 ```{r ADC by weekday and weekend kables}
 unit_type_wkendwkday_adc_table <- unit_type_wkendwkday_adc_table %>%
   rename(`Unit Type` = UnitType) %>%
@@ -316,22 +329,35 @@ kable(unit_type_wkendwkday_adc_table,
       escape = FALSE,
       align = "l",
       digits = 1,
-      caption = paste("Average Daily Census on Weekdays and Weekends")) %>%
+      caption = paste("Average Daily Census on Weekdays and Weekends"),
+      col.names = c("Unit Type", "Weekday", "Weekend", "Weekday", "Weekend", "Weekday", "Weekend")) %>%
   kable_styling(bootstrap_options = "hover",
                 font_size = 11,
                 full_width = FALSE) %>%
-  row_spec(row = 0,
-           background = "#221f72",
-           color = "white") %>%
+  column_spec(c(2:3),
+              background = "#ccf1ff") %>%
+  column_spec(c(4:5),
+              background = "#fccfec") %>%
+  column_spec(c(6:7),
+              background = "#d8d7f4") %>%
+  # row_spec(row = 0,
+  #          background = "#221f72",
+  #          color = "white") %>%
   row_spec(row = nrow(unit_type_wkendwkday_adc_table),
            bold = TRUE,
-           italic = TRUE) %>%
-  column_spec(c(1, 3,5, 7), border_right = TRUE)
+           italic = TRUE,
+           background = "#e5e5e6") %>%
+  column_spec(c(1, 3, 5, 7), border_right = TRUE) %>%
+  add_header_above(c(" " = 1, "MSH" = 2, "MSM" = 2, "MSW" = 2),
+                   background = c("", "#00AEEF", "#D80B8C", "#221F72"),
+                   line = TRUE,
+                   color = "white")
+
 
 
 ```
 
-### ADC by Day of Week
+#### ADC by Day of Week
 ```{r ADC by day of week kables}
 
 site_adc_dow <- function(site) {
@@ -358,7 +384,8 @@ site_adc_dow <- function(site) {
              color = "white") %>%
     row_spec(row = nrow(subset_data), 
              bold = TRUE,
-             italic = TRUE) %>%
+             italic = TRUE,
+             background = "#e5e5e6") %>%
     column_spec(c(1, 8), border_right = TRUE)
 
 }
@@ -374,7 +401,7 @@ site_adc_dow(site = "MSW")
 
 ```
 
-### Department Mappings
+#### Department Mappings
 ```{r Department Mappings}
 excluded_unit_types <- unique(dept_mapping_crosswalk$`Unit Type`)
 
@@ -399,7 +426,7 @@ datatable(dept_mapping_table,
 
 ```
 
-### Methodology and Assumptions
+#### Methodology and Assumptions
 
 **Data Source and Methodology**
 
@@ -408,3 +435,9 @@ datatable(dept_mapping_table,
 * Census analysis represents census between 3/1/21 and 5/31/21
 * Analysis excludes any census days in departments that are not included (see Department Mappings tab)
 * Discharge days are not included as census days
+
+**ALOS Methodology**
+
+* LOS for each encounter broken out by total days in each unit type.
+* For example, if a patient has a total LOS of 10 days and spends 3 days in an ICU then 7 days in Med Surg, the patient would have an ICU LOS of 3 and Med Surg LOS of 7.
+* ALOS by unit type calculated as (Sum of Census Days in Unit Type) / (Number of Encounters with LOS > 0 in that Unit Type)
