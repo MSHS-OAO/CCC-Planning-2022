@@ -49,19 +49,19 @@ library(DT)
 
 
 ```{r Set directory, import reference and census data, include = FALSE}
-# # Clear history
-# rm(list = ls())
-# 
-# ## Determine path for working directory --------------
-# if ("Presidents" %in% list.files("J://")) {
-#   user_directory <- paste0("J:/Presidents/HSPI-PM/",
-#                            "Operations Analytics and Optimization/Projects/",
-#                            "System Operations/CCC Strike Planning")
-# } else {
-#   user_directory <- paste0("J:/deans/Presidents/HSPI-PM/",
-#                            "Operations Analytics and Optimization/Projects/",
-#                            "System Operations/CCC Strike Planning")
-# }
+# Clear history
+rm(list = ls())
+
+## Determine path for working directory --------------
+if ("Presidents" %in% list.files("J://")) {
+  user_directory <- paste0("J:/Presidents/HSPI-PM/",
+                           "Operations Analytics and Optimization/Projects/",
+                           "System Operations/CCC Strike Planning")
+} else {
+  user_directory <- paste0("J:/deans/Presidents/HSPI-PM/",
+                           "Operations Analytics and Optimization/Projects/",
+                           "System Operations/CCC Strike Planning")
+}
 
 ## Import data ---------
 ### Census data
@@ -109,7 +109,7 @@ wkend_wkday_summary <- dates_df %>%
 unit_type_order <- c("ICU",
                      "Med Surg",
                      "Tele",
-                     "ED",
+                     "ED IP Boarder",
                      "L&D",
                      "Mother Baby",
                      "NICU",
@@ -120,6 +120,8 @@ unit_type_order <- c("ICU",
                      "Psych ED")
 
 site_order <- c("MSH", "MSM", "MSW")
+
+wkday_wkend_order <- c("Weekday", "Weekend")
 ```
 
 ```{r Process census data and calculate ADC by various stratifications}
@@ -144,6 +146,10 @@ census_range_df <- left_join(census_range_df,
                              dept_mapping_crosswalk,
                              by = c("CensusDept" = "Dept"))
 
+census_range_df <- left_join(census_range_df,
+                             admit_type_mapping,
+                             by = c("Admission Type" = "AdmissionType"))
+
 census_range_df <- census_range_df %>%
   rename(CensusSite = Site,
          UnitType = `Unit Type`) %>%
@@ -153,9 +159,16 @@ census_range_df <- census_range_df %>%
                            ordered = TRUE),
          CensusSite = factor(CensusSite,
                              levels = site_order,
+                             ordered = TRUE),
+         WkendWkday = factor(WkendWkday,
+                             levels = wkday_wkend_order,
                              ordered = TRUE)) %>%
   arrange(CensusSite, UnitType, DOWNum)
 
+dept_summary_epic <- census_range_df %>%
+  filter(CensusSite %in% c("MSM", "MSW")) %>%
+  group_by(CensusSite, CensusDept) %>%
+  summarize(Census = sum(CensusDay, na.rm = TRUE))
 
 ## ADC across all days -----------------
 unit_type_total_adc <- census_range_df %>%
@@ -197,6 +210,8 @@ unit_type_wkendwkday_adc_table <- unit_type_wkendwkday_adc %>%
                fill = "-",
                na.rm = TRUE)
 
+
+
 ## ADC by day of week ---------------------
 unit_type_dow_adc <- census_range_df %>%
   group_by(CensusSite,
@@ -220,6 +235,9 @@ unit_type_dow_adc_table <- unit_type_dow_adc %>%
   adorn_totals(where = "row",
                fill = "-",
                na.rm = TRUE)
+
+
+
 ```
 
 ```{r ALOS for each site and unit type}
@@ -401,7 +419,183 @@ site_adc_dow(site = "MSW")
 
 ```
 
-#### Department Mappings
+
+
+```{r Census Scenarios by Admit Type}
+scenarios <- c(.75, .5, .1, .05)
+names(scenarios) <- paste0("Scenario",
+                           which(scenarios == scenarios),
+                           "_",
+                           100 * scenarios,
+                           "Percent_Elective")
+
+scenarios_df <- as.data.frame(t(scenarios))
+
+unit_type_admit_type_adc <- census_range_df %>%
+  group_by(CensusSite,
+           UnitType,
+           WkendWkday,
+           ElectiveNonElective) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup()
+
+unit_type_admit_type_adc <- left_join(unit_type_admit_type_adc,
+                                  wkend_wkday_summary,
+                                  by = c("WkendWkday" = "WkendWkday"))
+
+unit_type_admit_type_adc <- unit_type_admit_type_adc %>%
+  pivot_wider(names_from = ElectiveNonElective,
+              values_from = CensusDays) %>%
+  rowwise() %>%
+  mutate(Total = sum(Elective, `Non-Elective`, na.rm = TRUE),
+         Elective_ADC = Elective / Count,
+         NonElective_ADC = `Non-Elective` / Count, 
+         Total_ADC = Total / Count,
+         Elective_Percent = percent(Elective / Total),
+         NonElective_Percent = percent(`Non-Elective` / Total)) %>%
+  relocate(Elective_ADC, .after = NonElective_ADC) %>%
+  relocate(Elective_Percent, .after = NonElective_Percent)
+
+census_scenarios <- cbind(unit_type_admit_type_adc,
+                          scenarios_df)
+
+census_scenarios <- census_scenarios %>%
+  mutate(across(contains("Scenario"),
+                function(x) {
+                  x * .$Elective_ADC
+                  },
+                .names = "{.col}_ADC"
+                )) %>%
+  # rowwise() %>%
+  mutate(across(matches("^(Scenario).*(ADC)$"),
+                function(x) {
+                  replace_na(x, 0) + .$NonElective_ADC
+                },
+                .names = "{.col}_Total")
+  ) %>%
+    select(-matches("^(Scenario).*(Elective)$")) %>%
+    rename_with(.fn = ~ str_replace(.x, "Elective_ADC_Total", "Total_ADC"),
+                .cols = matches("^(Scenario).*(_Total)$")) %>%
+    select(-Count,
+           -Elective, -`Non-Elective`, -Total) %>%
+    select(colnames(.[!str_detect(colnames(.), "^(Scenario).*(ADC)")]),
+           sort(colnames(.[str_detect(colnames(.), "^(Scenario).*(ADC)$")]))) %>%
+    relocate(WkendWkday, .after = CensusSite) %>%
+    arrange(CensusSite, WkendWkday, UnitType)
+
+
+census_scenario_kable <- function(site, wkend_wkday) {
+  
+  subset_census_scenarios <- census_scenarios %>%
+    filter(CensusSite %in% site &
+             WkendWkday %in% wkend_wkday) %>%
+    select(-CensusSite, -WkendWkday) %>%
+    adorn_totals(where = "row")
+  
+  clean_headers = rep(2, length(scenarios))
+  
+  names(clean_headers) <- paste(
+    gsub("(Scenario)([0-9]+)", "\\1 \\2:", 
+         str_replace(
+           str_replace_all(names(scenarios), "_", " "),
+           "Percent", "%")),
+    "Admissions")
+  
+  kable(subset_census_scenarios,
+        format = "html",
+        escape = FALSE,
+        align = "l",
+        digits = 1,
+        caption = paste(site, wkend_wkday, "ADC Scenarios"),
+        col.names = c("Unit Type",
+                      "Non-Elective ADC", "Elective ADC", "Total ADC",
+                      "Non-Elective %", "Elective %",
+                      rep(c("Elective ADC", "Total ADC"),
+                          length(scenarios))))%>%
+    kable_styling(bootstrap_options = "hover",
+                  font_size = 11,
+                  full_width = FALSE) %>%
+    column_spec(c(2:6),
+                background = "#f2f2f3") %>%
+    column_spec(c(7:9),
+                background = "#ccf1ff") %>%
+    column_spec(c(9:10),
+                background = "#fccfec") %>%
+    column_spec(c(11:12),
+                background = "#d8d7f4") %>%
+    column_spec(c(13:14),
+                background = "#e5e5e6") %>%
+    # row_spec(row = 0,
+    #          background = "#221f72",
+    #          color = "white") %>%
+    row_spec(row = nrow(subset_census_scenarios),
+             bold = TRUE,
+             italic = TRUE) %>% #,
+    # background = "#e5e5e6") %>%
+    column_spec(c(1, 4, 6, 8, 10, 12), border_right = TRUE) %>%
+    add_header_above(c(" " = 1,
+                       "Baseline ADC" = 5,
+                       clean_headers),
+                     background = c("", "#CBCCCD", "#00AEEF", "#D80B8C",
+                                    "#221F72", "#58595B"),
+                     line = TRUE,
+                     color = c("black",
+                               "white",
+                               "white",
+                               "white",
+                               "white",
+                               "white"))
+  
+}
+
+
+
+
+
+```
+
+#### Census Scenarios
+```{r Census Scenarios by Admission Type}
+census_scenario_kable("MSH", "Weekday")
+
+census_scenario_kable("MSH", "Weekend")
+
+census_scenario_kable("MSM", "Weekday")
+
+census_scenario_kable("MSM", "Weekend")
+
+census_scenario_kable("MSW", "Weekday")
+
+census_scenario_kable("MSW", "Weekend")
+
+
+```
+
+#### Methodology and Reference Tables
+
+**Data Source and Methodology**
+
+* Based on Epic Census Data provided by Enterprise Reporting Team on 10/21/22
+* Data includes inpatients discharged between 3/1/21 and 5/31/21
+* Census analysis represents census between 3/1/21 and 5/31/21
+* Analysis excludes any census days in departments that are not included (see Department Mappings below)
+* Discharge days are not included as census days
+
+**ALOS Methodology**
+
+* LOS for each encounter broken out by total days in each unit type.
+* For example, if a patient has a total LOS of 10 days and spends 3 days in an ICU then 7 days in Med Surg, the patient would have an ICU LOS of 3 and Med Surg LOS of 7.
+* ALOS by unit type calculated as (Sum of Census Days in Unit Type) / (Number of Encounters with LOS > 0 in that Unit Type)
+
+**Census Scenario Methodology**
+
+* Distinction between elective and non-elective admission based on Admission Type (see Admit Type Mappings below).
+* All non-elective volume assumed to remain constant for census scenarios and only elective admission volume changes
+
+---
+
+**Department Mapping Table**
+
 ```{r Department Mappings}
 excluded_unit_types <- unique(dept_mapping_crosswalk$`Unit Type`)
 
@@ -420,24 +614,28 @@ dept_mapping_table <- dept_mapping_crosswalk %>%
 datatable(dept_mapping_table,
           rownames = FALSE,
           options = list(
-            pageLength = 20,
+            pageLength = 15,
             paging = TRUE
-          ))
+          )
+          )
 
 ```
 
-#### Methodology and Assumptions
+---
 
-**Data Source and Methodology**
+**Admit Type Mapping Table**
 
-* Based on Epic Census Data provided by Enterprise Reporting Team on 10/21/22
-* Data includes inpatients discharged between 3/1/21 and 5/31/21
-* Census analysis represents census between 3/1/21 and 5/31/21
-* Analysis excludes any census days in departments that are not included (see Department Mappings tab)
-* Discharge days are not included as census days
+```{r Admit Source Mappings}
+admit_type_table <- admit_type_mapping %>%
+  rename("Admission Type" = AdmissionType,
+         "Elective or Non-Elective" = ElectiveNonElective)
 
-**ALOS Methodology**
+datatable(admit_type_table,
+          rownames = FALSE,
+          options = list(
+            pageLength = 20,
+            paging = TRUE
+          )
+          )
 
-* LOS for each encounter broken out by total days in each unit type.
-* For example, if a patient has a total LOS of 10 days and spends 3 days in an ICU then 7 days in Med Surg, the patient would have an ICU LOS of 3 and Med Surg LOS of 7.
-* ALOS by unit type calculated as (Sum of Census Days in Unit Type) / (Number of Encounters with LOS > 0 in that Unit Type)
+```
