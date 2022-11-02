@@ -275,6 +275,7 @@ unit_type_los_summary <- enc_los_summary %>%
 #### ADC Summary
 ```{r Total ADC kables}
 unit_type_total_adc_table <- unit_type_total_adc_table %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
   rename(`Unit Type` = UnitType) %>%
   pivot_longer(cols = matches("MS[A-Z]{1}"),
                names_to = "Site") %>%
@@ -339,6 +340,7 @@ kable(unit_type_adc_los_table,
 #### ADC by Weekend/Weekday
 ```{r ADC by weekday and weekend kables}
 unit_type_wkendwkday_adc_table <- unit_type_wkendwkday_adc_table %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
   rename(`Unit Type` = UnitType) %>%
   rename_with(~str_replace(.x, "_", "\\ "), contains("_"))
 
@@ -451,6 +453,7 @@ unit_type_admit_type_adc <- unit_type_admit_type_adc %>%
          Elective_ADC = Elective / Count,
          NonElective_ADC = `Non-Elective` / Count, 
          Total_ADC = Total / Count,
+         across(where(is.numeric), ~replace_na(.x, 0)),
          Elective_Percent = percent(Elective / Total),
          NonElective_Percent = percent(`Non-Elective` / Total)) %>%
   relocate(Elective_ADC, .after = NonElective_ADC) %>%
