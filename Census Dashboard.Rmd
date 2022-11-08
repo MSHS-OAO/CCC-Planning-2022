@@ -77,11 +77,14 @@ dept_mapping <- read_excel(path = paste0(user_directory,
 dept_mapping_crosswalk <- dept_mapping %>%
   select(-Notes, -`ARZ Notes`)
 
+### Admission type mapping file
 admit_type_mapping <- read_excel(path = paste0(user_directory,
                                          "/Data",
                                          "/Census Dept and Admit Mappings 2022-10-25.xlsx"),
                            sheet = "Admit Type")
 
+
+### Dates of interest for this analysis
 census_date_start <- as.Date("3/1/21", format = "%m/%d/%y")
 census_date_end <- as.Date("5/31/21", format = "%m/%d/%y")
 
@@ -89,6 +92,7 @@ dates_df <- data.frame("CensusDate" = seq.Date(from = census_date_start,
                                                to = census_date_end,
                                                by = "day"))
 
+### Determine total days, weekdays/weekends, etc. in the date range of interest
 dates_df <- dates_df %>%
   mutate(DOW = wday(CensusDate, label = TRUE, abbr = TRUE),
          WkendWkday = ifelse(DOW %in% c("Sat", "Sun"), "Weekend",
@@ -106,6 +110,8 @@ wkend_wkday_summary <- dates_df %>%
   summarize(Count = n()) %>%
   ungroup()
 
+
+### Specify hierarchy of units included in analysis for consistent visualizations
 unit_type_order <- c("ICU",
                      "Med Surg",
                      "Tele",
@@ -120,19 +126,23 @@ unit_type_order <- c("ICU",
                      "Psych",
                      "Psych ED")
 
+### Specify heirarchy of sites included in analysis for consistent visualizations
 site_order <- c("MSH", "MSM", "MSW")
 
 wkday_wkend_order <- c("Weekday", "Weekend")
 ```
 
 ```{r Process census data and calculate ADC by various stratifications}
+### Primary census data processing
 census_range_df <- raw_df %>%
+  # Rename columns from raw data for easier analysis
   rename(Encounter = `External Enc Id`,
          AdmitDate = `Admit Date`,
          DischDate = `Dsch Date`,
          CensusDate = `Census Date`,
          CensusDept = `Census Dept`,
          DischSite = `Ip Site`) %>%
+  # Format columns and determine days of week
   mutate(AdmitDate = as.Date(AdmitDate),
          DischDate = as.Date(DischDate),
          CensusDate = as.Date(CensusDate),
@@ -141,20 +151,25 @@ census_range_df <- raw_df %>%
          DOWNum = wday(CensusDate, label = FALSE),
          WkendWkday = ifelse(DOW %in% c("Sat", "Sun"), "Weekend", 
                              "Weekday")) %>%
+  # Filter on appropriate date range
   filter(between(CensusDate, census_date_start, census_date_end))
 
+### Crosswalk with department mapping
 census_range_df <- left_join(census_range_df,
                              dept_mapping_crosswalk,
                              by = c("CensusDept" = "Dept"))
 
+### Crosswalk with admission type mapping
 census_range_df <- left_join(census_range_df,
                              admit_type_mapping,
                              by = c("Admission Type" = "AdmissionType"))
 
+### Filter out excluded departments/unit types
 census_range_df <- census_range_df %>%
   rename(CensusSite = Site,
          UnitType = `Unit Type`) %>%
   filter(Include %in% "Yes") %>%
+  # Sort data based on defined hierarchy
   mutate(UnitType = factor(UnitType,
                            levels = unit_type_order,
                            ordered = TRUE),
@@ -237,17 +252,18 @@ unit_type_dow_adc_table <- unit_type_dow_adc %>%
                fill = "-",
                na.rm = TRUE)
 
-
-
 ```
 
 ```{r ALOS for each site and unit type}
 ## Encounter level summary
+
+### Summarize each encounter's LOS in each unit type
 enc_unit_type_los <- census_range_df %>%
   group_by(Encounter, CensusSite, UnitType) %>%
   summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
   ungroup()
 
+### Calculate ALOS in each unit type based on total census days and unique encounters
 enc_los_summary <- enc_unit_type_los %>%
   group_by(CensusSite, UnitType) %>%
   summarize(TotalDays = sum(CensusDays, na.rm = TRUE),
@@ -262,6 +278,8 @@ enc_los_summary <- enc_unit_type_los %>%
          ALOS = TotalDays / NumEncounters) %>%
   arrange(CensusSite, UnitType)
 
+
+### Format for merging with ADC table
 unit_type_los_summary <- enc_los_summary %>%
   select(-TotalDays, -NumEncounters) %>%
   pivot_wider(names_from = CensusSite,
@@ -274,7 +292,9 @@ unit_type_los_summary <- enc_los_summary %>%
 ### Average Daily Census Breakdowns (Created on `r format(Sys.Date(), "%m/%d/%Y")`) {.tabset}
 
 #### ADC Summary
-```{r Total ADC kables}
+```{r Total ADC kable visualizations}
+
+### Format ADC table for easier merging with ALOS
 unit_type_total_adc_table <- unit_type_total_adc_table %>%
   mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
   rename(`Unit Type` = UnitType) %>%
@@ -288,10 +308,11 @@ unit_type_los_summary <- unit_type_los_summary %>%
                 names_to = "Site") %>%
   mutate(Metric = "ALOS")
 
-
+### Combine ADC and ALOS tables
 unit_type_adc_los_table <- rbind(unit_type_total_adc_table,
                                  unit_type_los_summary)
 
+### Arrange and reformat ADC and ALOS table
 unit_type_adc_los_table <- unit_type_adc_los_table %>%
   mutate(`Unit Type` = factor(`Unit Type`,
                               levels = c(unit_type_order, "Total"),
@@ -304,6 +325,7 @@ unit_type_adc_los_table <- unit_type_adc_los_table %>%
               names_sep = " ",
               values_from = value)
 
+### Create table for visualizing ADC and ALOS at each site
 kable(unit_type_adc_los_table,
       format = "html",
       escape = FALSE,
@@ -339,12 +361,15 @@ kable(unit_type_adc_los_table,
 ```
 
 #### ADC by Weekend/Weekday
-```{r ADC by weekday and weekend kables}
+```{r ADC by weekday and weekend kable visualizations}
+
+### Clean up formatting for weekday vs. weekend ADC table
 unit_type_wkendwkday_adc_table <- unit_type_wkendwkday_adc_table %>%
   mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
   rename(`Unit Type` = UnitType) %>%
   rename_with(~str_replace(.x, "_", "\\ "), contains("_"))
 
+### Create table for visualizing weekday vs. weekend ADC
 kable(unit_type_wkendwkday_adc_table,
       format = "html",
       escape = FALSE,
@@ -381,6 +406,7 @@ kable(unit_type_wkendwkday_adc_table,
 #### ADC by Day of Week
 ```{r ADC by day of week kables}
 
+### Custom function for creating table for visualizing ADC for each site by DOW with site as a character input
 site_adc_dow <- function(site) {
   subset_data <- unit_type_dow_adc_table %>%
     select(UnitType, contains(site)) %>%
@@ -425,6 +451,8 @@ site_adc_dow(site = "MSW")
 
 
 ```{r Census Scenarios by Admit Type}
+
+### Census scenarios
 scenarios <- c(.75, .5, .1, .05)
 names(scenarios) <- paste0("Scenario",
                            which(scenarios == scenarios),
@@ -434,6 +462,7 @@ names(scenarios) <- paste0("Scenario",
 
 scenarios_df <- as.data.frame(t(scenarios))
 
+### Census by elective vs. non-elective admissions
 unit_type_admit_type_adc <- census_range_df %>%
   group_by(CensusSite,
            UnitType,
@@ -442,10 +471,12 @@ unit_type_admit_type_adc <- census_range_df %>%
   summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
   ungroup()
 
+### Crosswalk with number of weekdays/weekends in date range
 unit_type_admit_type_adc <- left_join(unit_type_admit_type_adc,
-                                  wkend_wkday_summary,
-                                  by = c("WkendWkday" = "WkendWkday"))
+                                      wkend_wkday_summary,
+                                      by = c("WkendWkday" = "WkendWkday"))
 
+### Calculate ADC by admission type
 unit_type_admit_type_adc <- unit_type_admit_type_adc %>%
   pivot_wider(names_from = ElectiveNonElective,
               values_from = CensusDays) %>%
@@ -460,11 +491,14 @@ unit_type_admit_type_adc <- unit_type_admit_type_adc %>%
   relocate(Elective_ADC, .after = NonElective_ADC) %>%
   relocate(Elective_Percent, .after = NonElective_Percent)
 
+### Combine ADC with scenarios
 census_scenarios <- cbind(unit_type_admit_type_adc,
                           scenarios_df)
 
+### Determine ADC for various scenarios
 census_scenarios <- census_scenarios %>%
   mutate(across(contains("Scenario"),
+                # Multiply Elective ADC by census scenario scale factor
                 function(x) {
                   x * .$Elective_ADC
                   },
@@ -472,22 +506,25 @@ census_scenarios <- census_scenarios %>%
                 )) %>%
   # rowwise() %>%
   mutate(across(matches("^(Scenario).*(ADC)$"),
+                # Determine new total ADC assuming Non-Elective ADC remains the same
                 function(x) {
                   replace_na(x, 0) + .$NonElective_ADC
                 },
                 .names = "{.col}_Total")
-  ) %>%
-    select(-matches("^(Scenario).*(Elective)$")) %>%
-    rename_with(.fn = ~ str_replace(.x, "Elective_ADC_Total", "Total_ADC"),
-                .cols = matches("^(Scenario).*(_Total)$")) %>%
-    select(-Count,
-           -Elective, -`Non-Elective`, -Total) %>%
-    select(colnames(.[!str_detect(colnames(.), "^(Scenario).*(ADC)")]),
-           sort(colnames(.[str_detect(colnames(.), "^(Scenario).*(ADC)$")]))) %>%
-    relocate(WkendWkday, .after = CensusSite) %>%
-    arrange(CensusSite, WkendWkday, UnitType)
+         ) %>%
+  # Select, rename, and relocate columns
+  select(-matches("^(Scenario).*(Elective)$")) %>%
+  rename_with(.fn = ~ str_replace(.x, "Elective_ADC_Total", "Total_ADC"),
+              .cols = matches("^(Scenario).*(_Total)$")) %>%
+  select(-Count,
+         -Elective, -`Non-Elective`, -Total) %>%
+  select(colnames(.[!str_detect(colnames(.), "^(Scenario).*(ADC)")]),
+         sort(colnames(.[str_detect(colnames(.), "^(Scenario).*(ADC)$")]))) %>%
+  relocate(WkendWkday, .after = CensusSite) %>%
+  arrange(CensusSite, WkendWkday, UnitType)
 
 
+## Custom function for creating census scenario tables for each site and weekday/weekend combination
 census_scenario_kable <- function(site, wkend_wkday) {
   
   subset_census_scenarios <- census_scenarios %>%
@@ -560,6 +597,8 @@ census_scenario_kable <- function(site, wkend_wkday) {
 
 #### Census Scenarios
 ```{r Census Scenarios by Admission Type}
+
+## Call custom functions to create tables for visualizing census scenarios
 census_scenario_kable("MSH", "Weekday")
 
 census_scenario_kable("MSH", "Weekend")
