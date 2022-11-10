@@ -18,7 +18,7 @@ if ("Presidents" %in% list.files("J://")) {
 
 
 # Render markdown file with dashboard code and save with today's date
-rmarkdown::render(here::here("Census Dashboard.Rmd"), 
+rmarkdown::render(here::here("System Wide Census Scenarios.Rmd"), 
                   output_file = paste0(
                     user_directory,
                     "/Dashboards",
