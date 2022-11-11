@@ -195,7 +195,6 @@ receive_sites_21_df <- receive_sites_21_df %>%
   filter(between(CensusDate, census_date_start_21, census_date_end_21))
   
 
-
 ### Primary census data processing
 strike_sites_21_df <- strike_sites_21_df %>%
   # Rename columns from raw data for easier analysis
@@ -322,6 +321,146 @@ unit_type_los_summary_21 <- enc_los_summary_21 %>%
   select(-TotalDays, -NumEncounters) %>%
   pivot_wider(names_from = CensusSite,
               values_from = ALOS)
+
+```
+
+```{r Census calculations for 2022 comparison}
+census_range_22_df <- all_sites_22_df %>%
+  rename(Encounter = `External Enc Id`,
+         AdmitDate = `Month, Day, Year of Admit Date`,
+         DischDate = `Month, Day, Year of Dsch Date`,
+         CensusDate = `Month, Day, Year of Census Date`,
+         CensusDept = `Census Dept`,
+         DischSite = `Ip Site`) %>%
+  # Format columns and determine days of week
+  mutate(AdmitDate = as.Date(AdmitDate),
+         DischDate = as.Date(DischDate),
+         CensusDate = as.Date(CensusDate),
+         CensusDay = ifelse(CensusDate == DischDate, 0, 1),
+         DOW = wday(CensusDate, label = TRUE, abbr = TRUE),
+         DOWNum = wday(CensusDate, label = FALSE),
+         WkendWkday = ifelse(DOW %in% c("Sat", "Sun"), "Weekend", 
+                             "Weekday")) %>%
+  # Filter on appropriate date range
+  filter(between(CensusDate, census_date_start_22, census_date_end_22))
+
+### Crosswalk with department mapping
+census_range_22_df <- left_join(census_range_22_df,
+                                dept_mapping_crosswalk,
+                                by = c("CensusDept" = "Dept"))
+
+### Crosswalk with admission type mapping
+census_range_22_df <- left_join(census_range_22_df,
+                                admit_type_mapping,
+                                by = c("Admission Type" = "AdmissionType"))
+
+### Filter out excluded departments/unit types
+census_range_22_df <- census_range_22_df %>%
+  rename(CensusSite = Site,
+         UnitType = `Unit Type`) %>%
+  filter(Include %in% "Yes") %>%
+  # Sort data based on defined hierarchy
+  mutate(UnitType = factor(UnitType,
+                           levels = unit_type_order,
+                           ordered = TRUE),
+         CensusSite = factor(CensusSite,
+                             levels = all_sites_order,
+                             ordered = TRUE),
+         WkendWkday = factor(WkendWkday,
+                             levels = wkday_wkend_order,
+                             ordered = TRUE)) %>%
+  arrange(CensusSite, UnitType, DOWNum)
+
+## ADC across all days for 2021 -----------------
+unit_type_total_adc_22 <- census_range_22_df %>%
+  group_by(CensusSite,
+           UnitType) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(ADC = CensusDays / total_days_22)
+
+unit_type_total_adc_table_22 <- unit_type_total_adc_22 %>%
+  select(-CensusDays) %>%
+  pivot_wider(names_from = CensusSite,
+              values_from = ADC) %>%
+  adorn_totals(where = "row",
+               fill = "-",
+               na.rm = TRUE)
+
+## ADC by weekend/weekdays ----------------------
+unit_type_wkendwkday_adc_22 <- census_range_22_df %>%
+  group_by(CensusSite,
+           UnitType,
+           WkendWkday) %>%
+  summarize(CensusDays = sum(CensusDay, na.rm = TRUE)) %>%
+  ungroup()
+
+unit_type_wkendwkday_adc_22 <- left_join(unit_type_wkendwkday_adc_22,
+                                         wkend_wkday_summary_22,
+                                         by = c("WkendWkday" = "WkendWkday"))
+
+unit_type_wkendwkday_adc_22 <- unit_type_wkendwkday_adc_22 %>%
+  mutate(ADC = CensusDays / Count)
+
+unit_type_wkendwkday_adc_table_22 <- unit_type_wkendwkday_adc_22 %>%
+  select(-CensusDays, -Count) %>%
+  pivot_wider(names_from = c(CensusSite, WkendWkday),
+              names_sep = "_",
+              values_from = ADC) %>%
+  adorn_totals(where = "row",
+               fill = "-",
+               na.rm = TRUE)
+
+```
+```{r Create dataframes comparing 2021 to 2022 census}
+total_adc_21 <- unit_type_total_adc_table_21 %>%
+  pivot_longer(cols = starts_with("MS"),
+               names_to = "Site",
+               values_to = "ADC") %>%
+  mutate(Year = 2021)
+
+total_adc_22 <- unit_type_total_adc_table_22 %>%
+  pivot_longer(cols = starts_with("MS"),
+               names_to = "Site",
+               values_to = "ADC") %>%
+  mutate(Year = 2022)
+
+total_adc_compare <- rbind(total_adc_21, total_adc_22)
+
+total_adc_compare <- total_adc_compare %>%
+  pivot_wider(names_from = Year,
+              values_from = ADC) %>%
+  mutate(ADCChange = `2022` - `2021`) %>%
+  pivot_longer(cols = c(`2021`, `2022`, ADCChange),
+               names_to = "Period",
+               values_to = "ADC") %>%
+  mutate(UnitType = factor(UnitType, levels = c(unit_type_order, "Total"),
+                           ordered = TRUE),
+         Site = factor(Site, levels = all_sites_order, ordered = TRUE)) %>%
+  arrange(Site, Period, UnitType)
+
+strike_sites_total_compare <- total_adc_compare %>%
+  filter(Site %in% strike_sites_order) %>%
+  pivot_wider(names_from = c(Site, Period),
+              names_sep = "_",
+              values_from = ADC) %>%
+  filter(., rowSums(is.na(.)) != ncol(.) - 1) %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
+  rename(`Unit Type` = UnitType) #%>%
+  # rename_with(~str_replace(.x, "_", "\\ "), contains("_")) %>%
+  # rename_with(~str_replace(.x, "ADCChange", "ADC Change"), contains("ADCChange"))
+
+receiving_sites_total_compare <- total_adc_compare %>%
+  filter(Site %in% receiving_sites_order) %>%
+  pivot_wider(names_from = c(Site, Period),
+              names_sep = "_",
+              values_from = ADC) %>%
+  filter(., rowSums(is.na(.)) != ncol(.) - 1) %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
+  rename(`Unit Type` = UnitType) #%>%
+  # rename_with(~str_replace(.x, "_", "\\ "), contains("_")) %>%
+  # rename_with(~str_replace(.x, "ADCChange", "ADC Change"), contains("ADCChange"))
+
 
 ```
 
@@ -688,13 +827,76 @@ census_scenario_kable("MSQ", "Weekend")
 
 ```
 
+#### 2021 vs. 2022 Census
+```{r Compare 2021 and 2022 census}
+total_adc_compare_kable <- function(site_type = c("strike", "receiving")) {
+  
+  sites_incl <- get(paste0(site_type, "_sites_order"))
+  
+  site_headers <- rep(3, length(sites_incl))
+  names(site_headers) <- sites_incl
+  
+  data <- total_adc_compare %>%
+    filter(Site %in% sites_incl) %>%
+    pivot_wider(names_from = c(Site, Period),
+                names_sep = "_",
+                values_from = ADC) %>%
+    filter(., rowSums(is.na(.)) != ncol(.) - 1) %>%
+    mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
+    rename(`Unit Type` = UnitType)
+  
+  kable(data,
+        format = "html",
+        escape = FALSE,
+        align = "c",
+        digits = 1,
+        caption = paste(str_to_title(site_type),
+                        "Sites 2021 and 2022 ADC Comparison",
+                        "(3/21-5/21 vs. 3/22-5/22)"),
+        col.names = c("Unit Type", rep(c("2021", "2022", "Change (2022-2021)"),
+                                       length(sites_incl)))
+          ) %>%
+    kable_styling(bootstrap_options = "hover",
+                  font_size = 11,
+                  full_width = FALSE) %>%
+    column_spec(c(2:4),
+                background = "#ccf1ff") %>%
+    column_spec(c(5:7),
+                background = "#fccfec") %>%
+    column_spec(c(8:10),
+                background = "#d8d7f4") %>%
+    # row_spec(row = 0,
+    #          background = "#221f72",
+    #          color = "white") %>%
+    row_spec(row = nrow(data),
+             bold = TRUE,
+             italic = TRUE) %>% #,
+    # background = "#e5e5e6") %>%
+    column_spec(c(1, 4, 7, 10), border_right = TRUE) %>%
+    add_header_above(c(" " = 1,
+                       site_headers),
+                     background = c("", "#00AEEF", "#D80B8C", "#221F72"),
+                     line = TRUE,
+                     color = c("black", rep("white", length(sites_incl))))
+
+}
+
+total_adc_compare_kable("strike")
+
+total_adc_compare_kable("receiving")
+
+
+
+```
+
 #### Methodology and Reference Tables
 
 **Data Source and Methodology**
 
-* Based on Epic Census Data provided by Enterprise Reporting Team on 10/21/22
-* Data includes inpatients discharged between 3/1/21 and 5/31/21
-* Census analysis represents census between 3/1/21 and 5/31/21
+* MSH, MSM, MSW 2021 Data: Based on Epic census data provided by Enterprise Reporting Team on 10/21/22
+* MSB, MSBI, MSQ 2021 Data and all sites 2022 Data: Based on Epic census data provided by Enterprise Reporting Team on 11/8/22
+* Data includes inpatients discharged from 3/1/21-5/31/21 and 3/1/22-5/1/22
+* Census analysis represents census days from 3/1/21-5/31/21 and 3/1/22-5/1/22
 * Analysis excludes any census days in departments that are not included (see Department Mappings below)
 * Discharge days are not included as census days
 
